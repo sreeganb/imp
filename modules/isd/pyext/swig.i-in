@@ -59,6 +59,7 @@ IMP_SWIG_OBJECT_SERIALIZE(IMP::isd, GaussianEMRestraint, GaussianEMRestraints);
 IMP_SWIG_OBJECT(IMP::isd, GaussianAnchorEMRestraint, GaussianAnchorEMRestraints);
 IMP_SWIG_OBJECT(IMP::isd, GammaPrior, GammaPriors);
 IMP_SWIG_OBJECT(IMP::isd, ResidueProteinProximityRestraint, ResidueProteinProximityRestraints);
+IMP_SWIG_OBJECT(IMP::isd, PMFRestraint, PMFRestraints);
 
 %extend IMP::isd::CrossLinkMSRestraint {
   %pythoncode %{
@@ -234,3 +235,4 @@ def create_model_and_particles():
 %include "IMP/isd/GammaPrior.h"
 %include "IMP/isd/em_utilities.h"
 %include "IMP/isd/ResidueProteinProximityRestraint.h"
+%include "IMP/isd/PMFRestraint.h"
