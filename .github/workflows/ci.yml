@@ -1,23 +1,27 @@
 name: CI
 on: [push, pull_request]
 
-env:
-  CXXFLAGS: "-fprofile-arcs -ftest-coverage"
-
 jobs:
   test:
     name: "Python ${{ matrix.python-version }} / ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        python-version: ["3.10"]
-        os: [ubuntu-22.04]
-        compiler: [gcc]
-    env:
-      CC: ${{ matrix.compiler }}
+        include:
+        - os: ubuntu-22.04
+          python-version: "3.10"
+          cxxflags: "-fprofile-arcs -ftest-coverage"
+          cgaldir: "/usr/lib/x86_64-linux-gnu/cmake/CGAL/"
+          skiptests: "expensive|medium|IMP\\.modeller\\-"
+        - os: macos-latest
+          python-version: "3.13"
+          cxxflags: "-std=c++17"
+          cgaldir: "/opt/homebrew/lib/cmake/CGAL/"
+          skiptests: "expensive|medium|IMP\\.modeller\\-|IMP\\.parallel\\-test_tasks|IMP\\.parallel\\-test_startup"
     steps:
       - uses: actions/checkout@v3
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -qq libboost-all-dev swig libhdf5-dev libeigen3-dev \
@@ -27,11 +31,25 @@ jobs:
             libopenmpi-dev python3-dev python3-numpy python3-protobuf \
             python3-nose python3-pip python3-biopython
           pip3 install codecov
+      - name: Install dependencies (Mac)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install swig boost cereal cgal opencv gsl fftw eigen hdf5 protobuf numpy
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          create-symlink: true
       - name: Set up git
         run: ./setup_git.py
       - name: Build IMP
         run: |
           mkdir build
           cd build
-          cmake .. -DUSE_PYTHON2=OFF -DCMAKE_CXX_FLAGS="${{ env.CXXFLAGS }}" -DCGAL_DIR=/usr/lib/x86_64-linux-gnu/cmake/CGAL/
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="${{ matrix.cxxflags }}" -DCGAL_DIR="${{ matrix.cgaldir }}"
           make -k -j 2
+          cd ..
+      - name: Test IMP
+        run: |
+          cd build
+          IMP_SKIP_UNSTABLE_TESTS=1 ctest --output-on-failure -L '\-tests?-' -E "${{ matrix.skiptests }}" -T Test
+          ctest --output-on-failure -R medium_test_standards -E 'IMP\.modeller\-' -T Test
