@@ -624,3 +624,477 @@ class PMFRestraint(IMP.Restraint):
         output["_TotalScore"] = str(score)
         output["PMFRestraint_" + self.label] = str(score)
         return output
+
+import IMP.em
+import numpy as np
+class EMIlanRestraint(IMP.pmi.restraints.RestraintBase):
+    """EM restraint using IMP.em BayesEM3D functions"""
+
+    def __init__(self, hier, em_map_file, resolution=20.0, normalize_target=True,
+                 sigma=1.0, weight=1.0, label=None):
+        """
+        Setup EM restraint using BayesEM3D functions with validation.
+        """
+        m = hier.get_model()
+        super().__init__(m, name="EMIlanRestraint", label=label, weight=weight)
+
+        self.hier = hier
+        self.resolution = resolution
+        self.sigma = sigma
+
+        # Load experimental map with validation
+        if isinstance(em_map_file, str):
+            self.exp_map = IMP.em.read_map(em_map_file)
+            print(f"Loaded EM map from: {em_map_file}")
+        else:
+            self.exp_map = em_map_file
+            print("Using provided DensityMap object")
+
+        # CRITICAL VALIDATION: Check if map is valid
+        self._validate_experimental_map()
+
+        # CRITICAL: Calculate RMS for proper correlation calculation
+        self.exp_map.calcRMS()
+
+        # Collect particles with proper XYZR and Mass setup
+        self.particles = []
+        self._setup_particles()
+
+        if len(self.particles) == 0:
+            raise ValueError("No XYZR particles found in hierarchy!")
+
+        print(f"EMIlanRestraint: {len(self.particles)} particles, resolution={resolution}Å")
+
+        # Validate particle positions vs map bounds
+        self._validate_particle_positions()
+
+        # Optional: Normalize target map intensities using BayesEM3D
+        if normalize_target:
+            print("Normalizing target map intensities using BayesEM3D...")
+            self._normalize_target_intensities()
+
+        # Validate setup before creating restraint
+        self._run_initial_validation()
+
+        # Create the actual scoring restraint
+        em_scorer = EMIlanScoringFunction(self)
+        self.rs.add_restraint(em_scorer)
+
+        # Store for output/debugging
+        self.last_ccc = 0.0
+        self.last_score = 0.0
+
+    def _validate_experimental_map(self):
+        """Validate that the experimental map is valid"""
+        print("=== Validating Experimental Map ===")
+
+        header = self.exp_map.get_header()
+        data = self.exp_map.get_data()
+
+        # Check dimensions
+        nx, ny, nz = header.get_nx(), header.get_ny(), header.get_nz()
+        nvox = header.get_number_of_voxels()
+        print(f"Map dimensions: {nx} x {ny} x {nz} = {nvox} voxels")
+
+        if nvox == 0:
+            raise ValueError("Experimental map has zero voxels!")
+
+        # Check data validity
+        data_min = np.min(data)
+        data_max = np.max(data)
+        data_mean = np.mean(data)
+        data_std = np.std(data)
+
+        print(f"Map data range: [{data_min:.6f}, {data_max:.6f}]")
+        print(f"Map data mean: {data_mean:.6f}, std: {data_std:.6f}")
+
+        if np.isnan(data_mean) or np.isinf(data_mean):
+            raise ValueError("Experimental map contains NaN or Inf values!")
+
+        if data_max == data_min:
+            raise ValueError("Experimental map has constant values (no variation)!")
+
+        # Check voxel size
+        voxel_size = self.exp_map.get_spacing()
+        print(f"Voxel size: {voxel_size:.3f} Å")
+
+        if voxel_size <= 0:
+            raise ValueError("Invalid voxel size!")
+
+    def _setup_particles(self):
+        """Setup particles with proper Mass and XYZR"""
+        sel = IMP.atom.Selection(self.hier, resolution=IMP.atom.ALL_RESOLUTIONS)
+        total_particles = 0
+
+        for p in sel.get_selected_particles():
+            total_particles += 1
+            if IMP.core.XYZR.get_is_setup(p):
+                # Ensure Mass is set up (required for BayesEM3D)
+                if not IMP.atom.Mass.get_is_setup(p):
+                    # Set mass based on radius (rough approximation)
+                    radius = IMP.core.XYZR(p).get_radius()
+                    estimated_mass = (radius**3)  # Volume-based
+                    IMP.atom.Mass.setup_particle(p, estimated_mass)
+
+                # Validate mass
+                mass = IMP.atom.Mass(p).get_mass()
+                if mass <= 0 or np.isnan(mass) or np.isinf(mass):
+                    print(f"Warning: Invalid mass {mass} for particle {p.get_name()}, setting to 1.0")
+                    IMP.atom.Mass(p).set_mass(1.0)
+
+                self.particles.append(p)
+
+        print(f"Particle setup: {len(self.particles)}/{total_particles} particles have XYZR")
+
+    def _validate_particle_positions(self):
+        """Check if particles are within reasonable bounds of the map"""
+        print("=== Validating Particle Positions ===")
+
+        # Get map bounding box
+        bbox = IMP.em.get_bounding_box(self.exp_map)
+        map_min = bbox.get_corner(0)
+        map_max = bbox.get_corner(1)
+
+        print(f"Map bounding box: [{map_min[0]:.1f}, {map_min[1]:.1f}, {map_min[2]:.1f}] to [{map_max[0]:.1f}, {map_max[1]:.1f}, {map_max[2]:.1f}]")
+
+        # Check particle positions
+        coords = []
+        radii = []
+        masses = []
+
+        for p in self.particles:
+            xyz = IMP.core.XYZ(p)
+            xyzr = IMP.core.XYZR(p)
+            mass = IMP.atom.Mass(p)
+
+            coord = [xyz.get_x(), xyz.get_y(), xyz.get_z()]
+            coords.append(coord)
+            radii.append(xyzr.get_radius())
+            masses.append(mass.get_mass())
+
+        coords = np.array(coords)
+        radii = np.array(radii)
+        masses = np.array(masses)
+
+        # Particle statistics
+        particle_min = np.min(coords, axis=0)
+        particle_max = np.max(coords, axis=0)
+        particle_center = np.mean(coords, axis=0)
+
+        print(f"Particle bounding box: [{particle_min[0]:.1f}, {particle_min[1]:.1f}, {particle_min[2]:.1f}] to [{particle_max[0]:.1f}, {particle_max[1]:.1f}, {particle_max[2]:.1f}]")
+        print(f"Particle center: [{particle_center[0]:.1f}, {particle_center[1]:.1f}, {particle_center[2]:.1f}]")
+        print(f"Radius range: [{np.min(radii):.1f}, {np.max(radii):.1f}] Å")
+        print(f"Mass range: [{np.min(masses):.1f}, {np.max(masses):.1f}]")
+
+        # Check overlap
+        map_center = (np.array(map_min) + np.array(map_max)) / 2
+        print(f"Map center: [{map_center[0]:.1f}, {map_center[1]:.1f}, {map_center[2]:.1f}]")
+
+        # Distance between centers
+        center_distance = np.linalg.norm(particle_center - map_center)
+        map_size = np.linalg.norm(np.array(map_max) - np.array(map_min))
+        print(f"Distance between centers: {center_distance:.1f} Å (map size: {map_size:.1f} Å)")
+
+        if center_distance > map_size:
+            print("Warning: Particles are very far from map center!")
+
+    def _normalize_target_intensities(self):
+        """Normalize target map intensities using BayesEM3D"""
+        # Generate test model map first to check compatibility
+        test_model_map = IMP.em.bayesem3d_get_density_from_particle(
+            self.exp_map, self.particles, self.resolution
+        )
+
+        test_data = test_model_map.get_data()
+        test_sum = np.sum(test_data)
+        test_max = np.max(test_data)
+
+        print(f"Test model map before normalization: sum={test_sum:.6f}, max={test_max:.6f}")
+
+        if test_sum > 1e-10:  # Only normalize if model map has reasonable density
+            IMP.em.bayesem3d_get_normalized_intensities(
+                self.exp_map, self.particles, self.resolution
+            )
+            print("Target map normalization complete")
+        else:
+            print("Warning: Model map density too low, skipping normalization")
+
+    def _run_initial_validation(self):
+        """Run initial validation tests similar to the IMP test cases"""
+        print("=== Running Initial Validation ===")
+
+        # Test 1: Target map self-correlation
+        ccc_self = IMP.em.bayesem3d_get_cross_correlation_coefficient(
+            self.exp_map, self.exp_map
+        )
+        print(f"Target map self-correlation: {ccc_self:.8f}")
+
+        if np.isnan(ccc_self) or ccc_self < 0.99:
+            print(f"Warning: Target map self-correlation is {ccc_self}, expected ~1.0")
+
+        # Test 2: Generate initial model map
+        print("Generating initial model map...")
+        initial_model_map = IMP.em.bayesem3d_get_density_from_particle(
+            self.exp_map, self.particles, self.resolution
+        )
+
+        # Check if model map has any density
+        model_data = initial_model_map.get_data()
+        model_sum = np.sum(model_data)
+        model_max = np.max(model_data)
+
+        print(f"Initial model map: sum={model_sum:.6f}, max={model_max:.6f}")
+
+        if model_sum == 0 or np.isnan(model_sum):
+            raise ValueError("Initial model map is empty or contains NaN!")
+
+        # Test 3: Model map self-correlation
+        ccc_model_self = IMP.em.bayesem3d_get_cross_correlation_coefficient(
+            initial_model_map, initial_model_map
+        )
+        print(f"Model map self-correlation: {ccc_model_self:.8f}")
+
+        # Test 4: Initial cross-correlation
+        initial_ccc = IMP.em.bayesem3d_get_cross_correlation_coefficient(
+            self.exp_map, initial_model_map
+        )
+        print(f"Initial cross-correlation: {initial_ccc:.6f}")
+
+        if np.isnan(initial_ccc):
+            raise ValueError("Initial cross-correlation is NaN!")
+
+        print("Initial validation passed")
+
+
+class EMIlanScoringFunction(IMP.Restraint):
+    """Scoring function following IMP.pmi patterns"""
+
+    def __init__(self, em_restraint):
+        IMP.Restraint.__init__(self, em_restraint.model, "EMIlanScoringFunction")
+        self.em_restraint = em_restraint
+        self._evaluation_count = 0
+        self.model_map = None
+
+        # Add caching to reduce redundant evaluations
+        self._last_positions_hash = None
+        self._cached_score = None
+        self._cached_ccc = None
+
+    def _get_positions_hash(self):
+        """Create a hash of current particle positions for caching"""
+        coords = []
+        for p in self.em_restraint.particles:
+            xyz = IMP.core.XYZ(p)
+            coords.extend([xyz.get_x(), xyz.get_y(), xyz.get_z()])
+        return hash(tuple(np.round(coords, 6)))  # Round to avoid floating point issues
+
+    def unprotected_evaluate(self, da):
+        """Evaluate with caching to avoid redundant calculations"""
+
+        self._evaluation_count += 1
+
+        # CHECK CACHE FIRST
+        current_hash = self._get_positions_hash()
+        if (self._last_positions_hash is not None and
+            current_hash == self._last_positions_hash and
+            self._cached_score is not None):
+
+            # Return cached result - suppress debug output for cached results
+            return self._cached_score
+
+        # Generate model density
+        self.model_map = IMP.em.bayesem3d_get_density_from_particle(
+            self.em_restraint.exp_map,
+            self.em_restraint.particles,
+            self.em_restraint.resolution,
+            1.0
+        )
+
+        # Quick validation of model map
+        model_data = self.model_map.get_data()
+        model_sum = np.sum(model_data)
+
+        if model_sum == 0 or np.isnan(model_sum) or np.isinf(model_sum):
+            print(f"Warning: Invalid model map at evaluation {self._evaluation_count}, sum={model_sum}")
+            score = 1000.0
+            ccc = 0.0
+        else:
+            # Calculate cross-correlation
+            ccc = IMP.em.bayesem3d_get_cross_correlation_coefficient(
+                self.em_restraint.exp_map,
+                self.model_map
+            )
+
+            # Validate CCC
+            if np.isnan(ccc) or np.isinf(ccc):
+                print(f"Warning: Invalid CCC at evaluation {self._evaluation_count}, ccc={ccc}")
+                score = 1000.0
+                ccc = 0.0
+            else:
+                # Convert to score (ensure it's valid)
+                score = 1000.0 * (1.0 - ccc)
+
+                if np.isnan(score) or np.isinf(score):
+                    print(f"Warning: Invalid score at evaluation {self._evaluation_count}, score={score}")
+                    score = 1000.0
+
+        # CACHE THE RESULTS
+        self._last_positions_hash = current_hash
+        self._cached_score = score
+        self._cached_ccc = ccc
+
+        # Store results
+        self.em_restraint.last_ccc = ccc
+        self.em_restraint.last_score = score
+
+        # Reduce debug output frequency
+        if self._evaluation_count % 500 == 1:  # Only every 500 evaluations
+            print(f"EM Evaluation #{self._evaluation_count}: CCC = {ccc:.6f}, Score = {score:.2f}")
+
+        return score
+
+    def do_get_inputs(self):
+        return self.em_restraint.particles
+
+    def get_output(self):
+        """Return output dict following IMP.pmi pattern like other restraints"""
+        output = {}
+        score = self.em_restraint.weight * self.unprotected_evaluate(None)
+        output["_TotalScore"] = str(score)
+        output["EMIlanRestraint_" + (self.em_restraint.label or "NoLabel")] = str(score)
+        output["EMIlanRestraint_CCC_" + (self.em_restraint.label or "NoLabel")] = str(self.em_restraint.last_ccc)
+        return output
+
+import math
+import numpy as np
+import scipy.ndimage
+import IMP
+import IMP.core
+import IMP.atom
+import IMP.em
+import IMP.pmi.tools
+import IMP.pmi.restraints
+
+class EMArthurRestraint(IMP.Restraint):
+    """EM restraint building a model density via weighted histogram + Gaussian blur
+       and scoring with IMP.em.get_coarse_cc_coefficient.
+    """
+
+    def __init__(self, model, hierarchy, exp_map, resolution=20.0,
+                 weight=1.0, label="EMArthur"):
+        super().__init__(model, "EMArthurRestraint %1%")
+        self.model = model
+        self.hierarchy = hierarchy
+        self.weight = weight
+        self.label = label
+        self.resolution = resolution
+        self.threshold = 0.0
+
+        if isinstance(exp_map, str):
+            self.exp_map = IMP.em.read_map(exp_map)
+        else:
+            self.exp_map = exp_map
+        self.exp_map.calcRMS()
+
+        header = self.exp_map.get_header()
+        self.voxel_size = header.get_spacing()
+        self.nx = header.get_nx()
+        self.ny = header.get_ny()
+        self.nz = header.get_nz()
+
+        sel = IMP.atom.Selection(hierarchy, resolution=IMP.atom.ALL_RESOLUTIONS)
+        self.particles = []
+        for p in sel.get_selected_particles():
+            if IMP.core.XYZR.get_is_setup(p):
+                if not IMP.atom.Mass.get_is_setup(p):
+                    radius = IMP.core.XYZR(p).get_radius()
+                    IMP.atom.Mass.setup_particle(p, radius**3)
+                self.particles.append(p)
+        if not self.particles:
+            raise ValueError("EMArthurRestraint: no XYZR particles found in hierarchy")
+
+        half_x = 0.5 * self.nx * self.voxel_size
+        half_y = 0.5 * self.ny * self.voxel_size
+        half_z = 0.5 * self.nz * self.voxel_size
+        self.bins = (
+            np.linspace(-half_x, half_x, self.nx + 1),
+            np.linspace(-half_y, half_y, self.ny + 1),
+            np.linspace(-half_z, half_z, self.nz + 1),
+        )
+        self.sigma = self.resolution / (4.0 * math.sqrt(2.0 * math.log(2.0))) / self.voxel_size
+
+        self.coords = np.zeros((len(self.particles), 3), dtype=np.float32)
+        self.weights = np.zeros(len(self.particles), dtype=np.float32)
+        self.model_map = IMP.em.SampledDensityMap(header)
+        self._eval_count = 0
+
+    def _update_arrays(self):
+        for i, p in enumerate(self.particles):
+            xyz = IMP.core.XYZ(p)
+            self.coords[i, 0] = xyz.get_x()
+            self.coords[i, 1] = xyz.get_y()
+            self.coords[i, 2] = xyz.get_z()
+            self.weights[i] = IMP.atom.Mass(p).get_mass()
+
+    def _fill_model_map(self, blurred):
+        # get_data() returns 3D array matching map dimensions
+        data_ptr = self.model_map.get_data()
+
+        # Check if we can assign directly (shapes must match)
+        if data_ptr.shape == blurred.shape:
+            data_ptr[:] = blurred.astype(np.float64)
+        else:
+            # Reshape blurred to match data_ptr's shape
+            # IMP might expect (nz, ny, nx) or (nx, ny, nz)
+            data_ptr[:] = blurred.T.astype(np.float64)  # Try transpose first
+
+        self.model_map.calcRMS()
+
+    def unprotected_evaluate(self, da):
+        self._eval_count += 1
+
+        self._update_arrays()
+        hist, _ = np.histogramdd(self.coords, bins=self.bins, weights=self.weights)
+        hist = np.swapaxes(hist, 0, 2)
+        blurred = scipy.ndimage.gaussian_filter(hist, self.sigma, truncate=4).astype(np.float32)
+
+        if not np.isfinite(blurred.sum()):
+            raise ValueError("EMArthurRestraint: invalid density values")
+        self._fill_model_map(blurred)
+
+        ccc = IMP.em.get_coarse_cc_coefficient(self.exp_map, self.model_map,
+                                               self.threshold, False)
+        if not np.isfinite(ccc):
+            raise ValueError("EMArthurRestraint: invalid CCC value")
+        score = self.weight * (1.0 - ccc)
+
+        if self._eval_count % 500 == 1:
+            print(f"EMArthur eval #{self._eval_count}: CCC={ccc:.6f}")
+        return score
+
+    def do_get_inputs(self):
+        return self.particles
+
+    def add_to_model(self):
+        IMP.pmi.tools.add_restraint_to_model(self.model, self)
+
+class EMArthurRestraintWrapper(IMP.pmi.restraints.RestraintBase):
+    """PMI-friendly wrapper mirroring other basic restraints."""
+
+    def __init__(self, model, hierarchy, exp_map, resolution=20.0,
+                 weight=1.0, label=None):
+        super().__init__(model, name="EMArthurRestraint",
+                         label=label, weight=weight)
+        restraint = EMArthurRestraint(model, hierarchy, exp_map,
+                                      resolution=resolution,
+                                      weight=weight,
+                                      label=label or "EMArthur")
+        self.rs.add_restraint(restraint)
+        self._restraint = restraint
+
+    def get_output(self):
+        score = self._restraint.unprotected_evaluate(None)
+        return {
+            "_TotalScore": str(score),
+            f"EMArthurRestraint_{self.label}": str(score)
+        }
