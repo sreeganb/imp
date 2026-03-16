@@ -31,15 +31,15 @@ skipIf = unittest.skipIf
 skipUnless = unittest.skipUnless
 
 
-def unstable(reason="unstable test"):
+def unstable(reason="unstable test; enable by setting $IMP_UNSTABLE_TESTS"):
     """Mark a test as 'unstable', i.e. that it fails randomly.
 
        'unstable' tests are tests that do not reliably pass or fail, such
        as 'science' tests that perform some sort of stochastic sampling or
        optimization and then assert on the results. This decorator can be
-       used to mark such tests. They are then skipped if the
-       IMP_SKIP_UNSTABLE_TESTS environment variable is set."""
-    return skipIf('IMP_SKIP_UNSTABLE_TESTS' in os.environ, reason)
+       used to mark such tests. They are skipped by default. To run the
+       tests anyway, set the IMP_UNSTABLE_TESTS environment variable."""
+    return skipUnless('IMP_UNSTABLE_TESTS' in os.environ, reason)
 
 
 class _TempDir:
@@ -155,7 +155,7 @@ class TestCase(unittest.TestCase):
         assertNotRegex = unittest.TestCase.assertNotRegexpMatches
 
     def __init__(self, *args, **keys):
-        unittest.TestCase.__init__(self, *args, **keys)
+        super().__init__(*args, **keys)
         self._progname = Path(sys.argv[0]).absolute()
 
     def setUp(self):
@@ -953,11 +953,11 @@ class _SubprocessWrapper(subprocess.Popen):
             env['PATH'] += ';' + libdir
         else:
             env = None
-        subprocess.Popen.__init__(self, [app]+list(args),
-                                  stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, env=env, cwd=cwd,
-                                  universal_newlines=True)
+        super().__init__([app]+list(args),
+                         stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, env=env, cwd=cwd,
+                         universal_newlines=True)
 
 
 class ApplicationTestCase(TestCase):

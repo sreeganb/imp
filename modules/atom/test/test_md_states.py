@@ -3,8 +3,10 @@ import IMP.test
 import IMP.core
 import IMP.algebra
 import IMP.atom
-
-linvelkey = IMP.FloatsKey('linvel')
+try:
+    import jax
+except ImportError:
+    jax = None
 
 
 class Tests(IMP.test.TestCase):
@@ -20,7 +22,7 @@ class Tests(IMP.test.TestCase):
                 x = IMP.core.XYZ.setup_particle(p, c[0])
                 x.set_coordinates_are_optimized(True)
                 IMP.atom.Mass.setup_particle(p, 1.0)
-                p.add_attribute(linvelkey, c[1])
+                IMP.atom.LinearVelocity.setup_particle(p, c[1])
                 ps.append(p)
         return m, ps
 
@@ -33,11 +35,16 @@ class Tests(IMP.test.TestCase):
         s = IMP.atom.RemoveRigidMotionOptimizerState(m, ps)
         s.set_period(1)
         s.remove_rigid_motion()
-        self.assertEqual(ps[0].get_value(linvelkey)[0], 15.)
-        self.assertEqual(ps[1].get_value(linvelkey)[0], -15.)
+        self.assertAlmostEqual(
+                IMP.atom.LinearVelocity(ps[0]).get_velocity()[0], 15.,
+                delta=1e-5)
+        self.assertAlmostEqual(
+                IMP.atom.LinearVelocity(ps[1]).get_velocity()[0], -15.,
+                delta=1e-5)
         for p in ps:
-            self.assertEqual(p.get_value(linvelkey)[1], 0.)
-            self.assertEqual(p.get_value(linvelkey)[2], 0.)
+            vel = IMP.atom.LinearVelocity(p).get_velocity()
+            self.assertEqual(vel[1], 0.)
+            self.assertEqual(vel[2], 0.)
 
     def test_remove_rigid_rotation(self):
         """Ensure that rigid rotation is removed"""
@@ -55,10 +62,10 @@ class Tests(IMP.test.TestCase):
         # We started with no net linear momentum, so removing the angular
         # momentum should cause the system to become stationary
         for p in ps:
-            vx, vy, vz = p.get_value(linvelkey)
-            self.assertAlmostEqual(vx, 0., delta=1e-6)
-            self.assertAlmostEqual(vy, 0., delta=1e-6)
-            self.assertAlmostEqual(vz, 0., delta=1e-6)
+            vel = IMP.atom.LinearVelocity(p).get_velocity()
+            self.assertAlmostEqual(vel[0], 0., delta=1e-6)
+            self.assertAlmostEqual(vel[1], 0., delta=1e-6)
+            self.assertAlmostEqual(vel[2], 0., delta=1e-6)
 
     def test_remove_rigid_one_particle(self):
         """Ensure that rigid removal works with a 1-particle system"""
@@ -68,10 +75,10 @@ class Tests(IMP.test.TestCase):
         s.set_period(1)
         self.assertEqual(s.get_period(), 1)
         s.remove_rigid_motion()
-        vx, vy, vz = ps[0].get_value(linvelkey)
-        self.assertEqual(vx, 0.)
-        self.assertEqual(vy, 0.)
-        self.assertEqual(vz, 0.)
+        vel = IMP.atom.LinearVelocity(ps[0]).get_velocity()
+        self.assertEqual(vel[0], 0.)
+        self.assertEqual(vel[1], 0.)
+        self.assertEqual(vel[2], 0.)
 
     def test_berendsen_thermostat(self):
         """Test Berendsen thermostat"""
@@ -99,6 +106,21 @@ class Tests(IMP.test.TestCase):
             for i in range(steps, 20):
                 self.assertAlmostEqual(ts[i], 298.0, delta=0.1)
 
+    @IMP.test.skipIf(jax is None, "No JAX support")
+    def test_jax_berendsen_thermostat(self):
+        """Test JAX implementation of Berendsen thermostat"""
+        m, ps = self.setup_particles([[IMP.algebra.Vector3D(0, 0, 0),
+                                       IMP.algebra.Vector3D(0.1, 0, 0)]],
+                                     copies=10)
+        scaler = IMP.atom.BerendsenThermostatOptimizerState(ps, 298.0, 8.0)
+        md = IMP.atom.MolecularDynamics(m)
+        md.set_maximum_time_step(4.0)
+        md.set_scoring_function([])
+        md.add_optimizer_state(scaler)
+        md._optimize_jax(20)
+        ts = md.get_kinetic_temperature(md.get_kinetic_energy())
+        self.assertAlmostEqual(ts, 298.0, delta=0.1)
+
     def test_langevin_thermostat(self):
         """Test Langevin thermostat"""
         # Need many particles due to random forces
@@ -119,6 +141,23 @@ class Tests(IMP.test.TestCase):
         # After a while, temperature should have stabilized at set value
         equilibrium_temp = sum(ts[40:140]) / 100.0
         self.assertAlmostEqual(equilibrium_temp, 298.0, delta=20.0)
+
+    @IMP.test.skipIf(jax is None, "No JAX support")
+    def test_jax_langevin_thermostat(self):
+        """Test JAX implementation of Langevin thermostat"""
+        m, ps = self.setup_particles([[IMP.algebra.Vector3D(0, 0, 0),
+                                       IMP.algebra.Vector3D(0.1, 0, 0)]],
+                                     copies=1000)
+        scaler = IMP.atom.LangevinThermostatOptimizerState(m, ps, 298.0, 0.1)
+        md = IMP.atom.MolecularDynamics(m)
+        md.set_maximum_time_step(4.0)
+        # Test MD with NullScoringFunction
+        md.set_scoring_function([])
+        md.add_optimizer_state(scaler)
+        md._optimize_jax(100)
+        ts = md.get_kinetic_temperature(md.get_kinetic_energy())
+        self.assertAlmostEqual(ts, 298.0, delta=50.0)
+
 
 if __name__ == '__main__':
     IMP.test.main()

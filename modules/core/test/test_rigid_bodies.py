@@ -4,6 +4,10 @@ import IMP.core
 import IMP.algebra
 
 
+_RB_QUAT_KEYS = [IMP.FloatKey("rigid_body_quaternion_%d" % i)
+                 for i in range(4)]
+
+
 class Tests(IMP.test.TestCase):
 
     """Tests for RigidBody function"""
@@ -224,6 +228,72 @@ class Tests(IMP.test.TestCase):
         except:
             pass
         self.assertTrue(not failure)
+
+    def test_update_rigid_body_members(self):
+        """Test _UpdateRigidBodyMembers modifier"""
+        m = IMP.Model()
+        p = self._create_hierarchy(m)
+        h = IMP.core.Hierarchy(p)
+        children = h.get_children()
+        cs = IMP.core.XYZs(children)
+        rbd = IMP.core.RigidBody.setup_particle(p, cs)
+        # Make sure that modifier recreates the original member coordinates
+        mod = IMP.core._UpdateRigidBodyMembers()
+        oldxyz = cs[0].get_coordinates()
+        cs[0].set_coordinates(IMP.algebra.Vector3D(0, 0, 0))
+        mod.apply_index(m, rbd)
+        self.assertLess(
+            IMP.algebra.get_distance(oldxyz, cs[0].get_coordinates()), 1e-3)
+
+    def test_accumulate_rigid_body_derivatives(self):
+        """Test _AccumulateRigidBodyDerivatives modifier"""
+        m = IMP.Model()
+        p = self._create_hierarchy(m, n=10)
+        h = IMP.core.Hierarchy(p)
+        children = h.get_children()
+        cs = IMP.core.XYZs(children)
+        rbd = IMP.core.RigidBody.setup_particle(p, cs)
+        rbd.set_coordinates_are_optimized(True)
+        rs = self._add_rb_restraints(rbd)
+        sf = IMP.core.RestraintsScoringFunction(rs)
+        x = sf.evaluate(True)
+        d = IMP.DerivativeAccumulator(1.0)
+        for x in cs:
+            x.add_to_derivatives(IMP.algebra.Vector3D(1000, 2000, 3000), d)
+        # Derivatives on the rigid body should be (roughly) 10x those on
+        # individual particles
+        mod = IMP.core._AccumulateRigidBodyDerivatives()
+        mod.apply_index(m, rbd)
+        derivs = rbd.get_derivatives()
+        self.assertLess(IMP.algebra.get_distance(
+            derivs, IMP.algebra.Vector3D(10000, 20000, 30000)), 40.)
+
+    def test_normalize_rotation(self):
+        """Test _NormalizeRotation modifier"""
+        m = IMP.Model()
+        p = self._create_hierarchy(m)
+        h = IMP.core.Hierarchy(p)
+        children = h.get_children()
+        cs = IMP.core.XYZs(children)
+        rbd = IMP.core.RigidBody.setup_particle(p, cs)
+        mod = IMP.core._NormalizeRotation()
+
+        # Zero quaternion should be reset to identity
+        for i in range(4):
+            rbd.set_value(_RB_QUAT_KEYS[i], 0.0)
+        mod.apply_index(m, rbd)
+        rot = rbd.get_reference_frame().get_transformation_to().get_rotation()
+        self.assertEqual([int(x * 10.) for x in rot.get_quaternion()],
+                         [10, 0, 0, 0])
+
+        # Non-normalized quaternion should be normalized
+        for i, val in enumerate((0., 2., 0., 0.)):
+            rbd.set_value(_RB_QUAT_KEYS[i], val)
+        mod.apply_index(m, rbd)
+        rot = rbd.get_reference_frame().get_transformation_to().get_rotation()
+        self.assertEqual([int(x * 10.) for x in rot.get_quaternion()],
+                         [0, 10, 0, 0])
+
 
 if __name__ == '__main__':
     IMP.test.main()

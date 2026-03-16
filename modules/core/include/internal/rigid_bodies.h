@@ -11,7 +11,9 @@
 #include <IMP/core/core_config.h>
 #include "../XYZ.h"
 #include "../Hierarchy.h"
+#include <IMP/singleton_macros.h>
 #include <IMP/algebra/Sphere3D.h>
+
 namespace IMP {
 namespace display {
 class Geometry;
