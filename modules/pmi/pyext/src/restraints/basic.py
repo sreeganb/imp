@@ -578,9 +578,10 @@ class ResidueProteinProximityRestraint(IMP.pmi.restraints.RestraintBase):
         return output
 
 class PMFRestraint(IMP.Restraint):
-    """Restrain particles based on a PMF lookup table with dynamic pair updates"""
+    """Restrain particles using a PMF lookup table with dynamic pair updates."""
 
-    def __init__(self, m, particles, pmf_file, distance_cutoff=None, weight=1.0, label="None"):
+    def __init__(self, m, particles, pmf_file, distance_cutoff=None,
+                 weight=1.0, label="None"):
         IMP.Restraint.__init__(self, m, "PMFRestraint %1%")
 
         self.m = m
@@ -588,15 +589,19 @@ class PMFRestraint(IMP.Restraint):
         self.label = label
 
         # Create the C++ restraint
-        self.pmf = IMP.isd.PMFRestraint(self.m, pmf_file, distance_cutoff or 0.0)
+        self.pmf = IMP.isd.PMFRestraint(
+            self.m, pmf_file, distance_cutoff or 0.0)
 
         if distance_cutoff is not None:
             # Set up containers for dynamic pair updates
             self.lsc = IMP.container.ListSingletonContainer(
                 self.m, [p.get_index() for p in particles])
-            self.cpc = IMP.container.ClosePairContainer(self.lsc, distance_cutoff)
+            self.cpc = IMP.container.ClosePairContainer(
+                self.lsc, distance_cutoff)
             self.pmf.set_containers(self.lsc, self.cpc)
-            print(f"Set up dynamic pair generation with distance cutoff {distance_cutoff}Å")
+            print(
+                "Set up dynamic pair generation with distance cutoff "
+                f"{distance_cutoff}Å")
         else:
             # Manual pair addition
             if isinstance(particles[0], (list, tuple)):
@@ -606,7 +611,9 @@ class PMFRestraint(IMP.Restraint):
             else:
                 for i in range(len(particles)):
                     for j in range(i + 1, len(particles)):
-                        print(f"Adding pair: {particles[i].get_name()} - {particles[j].get_name()}")
+                        print(
+                            f"Adding pair: {particles[i].get_name()} - "
+                            f"{particles[j].get_name()}")
                         self.pmf.add_particle_pair(particles[i], particles[j])
 
     def unprotected_evaluate(self, da):
