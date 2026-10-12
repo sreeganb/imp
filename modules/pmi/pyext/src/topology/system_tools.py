@@ -81,21 +81,18 @@ def get_structure(model, pdb_fn, chain_id, res_range=None, offset=0,
     else:
         sel = IMP.atom.get_default_pdb_selector()
 
+    if res_range:
+        if res_range[1] == "END":
+            sel &= IMP.atom.ResidueRangePDBSelector(res_range[0])
+        else:
+            sel &= IMP.atom.ResidueRangePDBSelector(*res_range)
+
     reader = read_file if model_num is None else read_multi_file
     mh = reader(pdb_fn, model, IMP.atom.ChainPDBSelector([chain_id]) & sel)
     if model_num is not None:
         mh = mh[model_num]
 
-    if res_range == [] or res_range is None:
-        ps = _select_ca_or_p(mh, chain=chain_id)
-    else:
-        start = res_range[0]
-        end = res_range[1]
-        if end == "END":
-            end = IMP.atom.Residue(
-                mh.get_children()[0].get_children()[-1]).get_index()
-        ps = _select_ca_or_p(mh, chain=chain_id,
-                             residue_indexes=range(start, end+1))
+    ps = _select_ca_or_p(mh, chain=chain_id)
     ret = []
 
     for p in ps:

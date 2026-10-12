@@ -2,8 +2,8 @@
 
 
 %{
-PyObject *_get_floats_data_numpy(PyObject *m_pyobj, unsigned sz, double *data,
-                                 bool read_only)
+PyObject *_get_floats_data_numpy(PyObject *m_pyobj, unsigned sz, int nsets,
+                                 double *data, bool read_only)
 {
 #if IMP_KERNEL_HAS_NUMPY
   if (numpy_import_retval != 0) {
@@ -12,14 +12,22 @@ PyObject *_get_floats_data_numpy(PyObject *m_pyobj, unsigned sz, double *data,
     return NULL;
   }
 
-  npy_intp dims[1];
-  dims[0] = sz;
+  int ndim;
+  npy_intp dims[2];
+  if (nsets > 1) {
+    ndim = 2;
+    dims[0] = nsets;
+    dims[1] = sz;
+  } else {
+    ndim = 1;
+    dims[0] = sz;
+  }
 
   /* Note that attribute tables are C-style contiguous so no special strides or
      other flags need to be passed to NumPy */
-  PyObject *obj = PyArray_New(&PyArray_Type, 1, dims, NPY_DOUBLE, NULL,
-                              data, 0, read_only ? 0 : NPY_ARRAY_WRITEABLE,
-                              NULL);
+  PyObject *obj = PyArray_New(&PyArray_Type, ndim, dims,
+                              NPY_DOUBLE, NULL, data, 0,
+                              read_only ? 0 : NPY_ARRAY_WRITEABLE, NULL);
   if (!obj) {
     return NULL;
   }
@@ -193,7 +201,7 @@ PyObject *_add_spheres_component(void *data, int nd, npy_intp *dims,
 }
 #endif
 
-PyObject *_get_spheres_data_numpy(PyObject *m_pyobj, unsigned sz,
+PyObject *_get_spheres_data_numpy(PyObject *m_pyobj, unsigned sz, int nsets,
                                   algebra::Sphere3D *data, bool read_only)
 {
 #if IMP_KERNEL_HAS_NUMPY
@@ -207,9 +215,19 @@ PyObject *_get_spheres_data_numpy(PyObject *m_pyobj, unsigned sz,
   algebra::Sphere3D::_get_struct_size(struct_size, center_offset,
                                       radius_offset);
 
-  npy_intp dims[2], strides[2];
-  dims[0] = sz;
-  strides[0] = struct_size;
+  int ndim;
+  npy_intp dims[3], strides[3];
+  if (nsets > 1) {
+    ndim = 2;
+    dims[0] = nsets;
+    dims[1] = sz;
+    strides[0] = struct_size * sz;
+    strides[1] = struct_size;
+  } else {
+    ndim = 1;
+    dims[0] = sz;
+    strides[0] = struct_size;
+  }
 
   PyObject *tuple = PyTuple_New(2);
   if (!tuple) {
@@ -219,9 +237,9 @@ PyObject *_get_spheres_data_numpy(PyObject *m_pyobj, unsigned sz,
   /* x, y, z */
   char *pt = (char *)data;
   if (data) pt += center_offset;
-  dims[1] = 3;
-  strides[1] = sizeof(double);
-  if (!_add_spheres_component(pt, 2, dims, strides, m_pyobj, tuple, 0,
+  dims[ndim] = 3;
+  strides[ndim] = sizeof(double);
+  if (!_add_spheres_component(pt, ndim + 1, dims, strides, m_pyobj, tuple, 0,
                               read_only)) {
     return NULL;
   }
@@ -229,7 +247,7 @@ PyObject *_get_spheres_data_numpy(PyObject *m_pyobj, unsigned sz,
   /* r */
   pt = (char *)data;
   if (data) pt += radius_offset;
-  if (!_add_spheres_component(pt, 1, dims, strides, m_pyobj, tuple, 1,
+  if (!_add_spheres_component(pt, ndim, dims, strides, m_pyobj, tuple, 1,
                               read_only)) {
     return NULL;
   }
@@ -248,7 +266,7 @@ PyObject *_get_derivatives_numpy(IMP::Model *m, IMP::FloatKey k,
                                  PyObject *m_pyobj, bool read_only)
 {
   unsigned sz = m->get_derivative_size(k);
-  return _get_floats_data_numpy(m_pyobj, sz,
+  return _get_floats_data_numpy(m_pyobj, sz, 0,
                              sz == 0 ? nullptr : m->access_derivative_data(k),
                              read_only);
 }
@@ -257,10 +275,11 @@ PyObject *_get_floats_numpy(IMP::Model *m, IMP::FloatKey k, PyObject *m_pyobj,
                             bool read_only)
 {
   unsigned sz = m->IMP::internal::FloatAttributeTable::get_attribute_size(k);
-  return _get_floats_data_numpy(m_pyobj, sz,
-           sz == 0 ? nullptr
-             : m->IMP::internal::FloatAttributeTable::access_attribute_data(k),
-           read_only);
+  int nsets = m->get_number_of_attribute_sets(k);
+  return _get_floats_data_numpy(m_pyobj, sz, nsets,
+       sz == 0 ? nullptr
+         : m->IMP::internal::FloatAttributeTable::access_full_attribute_data(k),
+       read_only);
 }
 
 PyObject *_get_ints_numpy(IMP::Model *m, IMP::IntKey k, PyObject *m_pyobj,
@@ -355,15 +374,16 @@ PyObject *_get_vector4dderiv_derivatives_numpy(
 PyObject *_get_spheres_numpy(IMP::Model *m, PyObject *m_pyobj, bool read_only)
 {
   unsigned sz = m->get_spheres_size();
-  return _get_spheres_data_numpy(m_pyobj, sz,
-                   sz == 0 ? nullptr : m->access_spheres_data(), read_only);
+  int nsets = m->get_number_of_sphere_attribute_sets();
+  return _get_spheres_data_numpy(m_pyobj, sz, nsets,
+               sz == 0 ? nullptr : m->access_full_spheres_data(), read_only);
 }
 
 PyObject *_get_sphere_derivatives_numpy(IMP::Model *m, PyObject *m_pyobj,
                                         bool read_only)
 {
   unsigned sz = m->get_sphere_derivatives_size();
-  return _get_spheres_data_numpy(m_pyobj, sz,
+  return _get_spheres_data_numpy(m_pyobj, sz, 0,
                   sz == 0 ? nullptr : m->access_sphere_derivatives_data(),
                   read_only);
 }

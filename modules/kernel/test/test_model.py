@@ -399,6 +399,25 @@ class Tests(IMP.test.TestCase):
         self.assertAlmostEqual(m2.get_attribute(fk, p.get_index()), 5.4,
                                delta=0.1)
 
+    def test_serialize_float_attributes_sets(self):
+        """Check that multiple sets of float attributes are (de-)serialized"""
+        m = IMP.Model()
+        fk = IMP.FloatKey("hi")
+        p = IMP.Particle(m)
+        m.add_attribute(fk, p.get_index(), 5.4)
+        m.set_number_of_attribute_sets(fk, 2)
+        m.set_active_attribute_set(fk, 1)
+        m.add_attribute(fk, p.get_index(), 9.9)
+
+        dump = pickle.dumps(m)
+        m2 = pickle.loads(dump)
+        self.assertEqual(m2.get_number_of_attribute_sets(fk), 2)
+        self.assertAlmostEqual(m2.get_attribute(fk, p.get_index()), 9.9,
+                               delta=0.1)
+        m2.set_active_attribute_set(fk, 0)
+        self.assertAlmostEqual(m2.get_attribute(fk, p.get_index()), 5.4,
+                               delta=0.1)
+
     def test_serialize_sparse_float_attributes(self):
         """Check that Model sparse float attributes are (de-)serialized"""
         m = IMP.Model()
@@ -686,11 +705,10 @@ class Tests(IMP.test.TestCase):
         self.assertEqual(len(rbs.bodies), 3)
         body2 = rbs.bodies[2]
         # rb3 should contain rb2
-        self.assertEqual(body2.body_member_rb_indexes, [1])
-        self.assertEqual(body2.body_member_nrb_indexes, [0])
+        self.assertEqual(body2.nested_bodies.rb_indexes, [1])
+        self.assertEqual(body2.nested_bodies.nrb_indexes, [0])
         self.assertEqual(rbs.lquaternion.shape, (1, 4))
         self.assertEqual(rbs.particle_from_nrb_index, [9])
-        self.assertEqual(rbs.nrb_index_from_particle, {9: 0})
 
         # Test that applying rigid body transformation to all members
         # (including rigid bodies) yields the correct global coordinates

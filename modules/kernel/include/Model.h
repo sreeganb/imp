@@ -2,7 +2,7 @@
  *  \file IMP/Model.h
  *  \brief Storage of a model, its restraints, constraints and particles.
  *
- *  Copyright 2007-2025 IMP Inventors. All rights reserved.
+ *  Copyright 2007-2026 IMP Inventors. All rights reserved.
  *
  */
 
@@ -179,6 +179,12 @@ class IMPKERNELEXPORT Model : public Object
   // time when moved_particles_*_cache_ were last updated, or 0
   unsigned moved_particles_cache_age_;
 
+  // cache of ordered ScoreStates
+  ScoreStatesTemp ordered_score_states_cache_;
+
+  // time when ordered_score_states_cache was last updated, or 0
+  unsigned ordered_score_states_cache_age_;
+
   void register_unique_id();
 
   friend class cereal::access;
@@ -252,6 +258,7 @@ class IMPKERNELEXPORT Model : public Object
       saved_dependencies_age_ = 0;
       dependencies_saved_ = false;
       moved_particles_cache_age_ = 0;
+      ordered_score_states_cache_age_ = 0;
     }
   }
 
@@ -525,6 +532,48 @@ class IMPKERNELEXPORT Model : public Object
   void set_is_optimized(FloatKey, ParticleIndex, bool);
   void add_to_derivative(FloatKey k, ParticleIndex particle, double v,
                          const DerivativeAccumulator &da);
+
+  /** \name Attribute sets
+      Normally the Model contains a single set of attributes. However, more
+      can be added if needed for certain applications.
+
+      Note that currently, for performance reasons, particle attributes
+      cannot be added if there is more than one attribute set. Set the
+      attributes for the first set before increasing the number of sets.
+
+      Currently, only Float attributes and spheres (XYZ coordinates, radii)
+      support attribute sets, not including internal coordinates.
+      @{
+   */
+
+  //! Get the current number of attribute sets (normally 1)
+  int get_number_of_attribute_sets(FloatKey k) const;
+
+  //! Set the number of attribute sets
+  /** The Model must contain at least one set, and this value can only be
+      changed when set 0 is active. */
+  void set_number_of_attribute_sets(FloatKey k, int nsets);
+
+  //! Set the currently active attribute set
+  /** Only a single attribute set can be active at a time. All get or set
+      of particle attributes will use the active set. */
+  void set_active_attribute_set(FloatKey k, int set);
+
+  //! Get the current number of sphere attribute sets (normally 1)
+  int get_number_of_sphere_attribute_sets() const;
+
+  //! Set the number of sphere attribute sets
+  /** The Model must contain at least one set, and this value can only be
+      changed when set 0 is active. */
+  void set_number_of_sphere_attribute_sets(int nsets);
+
+  //! Set the currently active sphere attribute set
+  /** Only a single attribute set can be active at a time. All get or set
+      of particle coordinates/radii will use the active set. */
+  void set_active_sphere_attribute_set(int set);
+
+  /** @} */
+
 #endif
 
   //! Get the particle from an index.

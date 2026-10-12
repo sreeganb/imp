@@ -114,9 +114,130 @@ struct ArrayTraits {
   static ContainerDataAccess access_container_data(Container&       c) { return c.data(); }
 };
 
+// A view into an IndexVector that contains one or more sets of
+// attributes, exposing a single active set at a time. The sets are
+// stored contiguously in memory, as a large 1D array.
+template <class Tag, class T, class Allocator = std::allocator<T>,
+          class Equal = std::equal_to<T>>
+class MultiIndexVector {
+  typedef IndexVector<Tag, T, Allocator, Equal> V;
+  typedef Vector<T, Allocator> P;
+
+  // Note that we provide a custom operator= so that must be updated
+  // if any members here are changed
+
+  // The full IndexVector of size_ particle attributes over nsets_
+  // attribute sets
+  V full_vector_;
+  int active_set_;
+  // Pointer into full_vector_ of the start of the active set
+  // ( = size_ * active_set_)
+  T *front_pointer_;
+  size_t offset_;
+  size_t size_;
+  int nsets_;
+
+  friend class cereal::access;
+  template<class Archive> void serialize(Archive &ar) {
+    ar(nsets_, full_vector_);
+    if (nsets_ > 1) {
+      ar(active_set_);
+    } else {
+      if (std::is_base_of<cereal::detail::InputArchiveBase, Archive>::value) {
+        active_set_ = 0;
+      }
+    }
+    if (std::is_base_of<cereal::detail::InputArchiveBase, Archive>::value) {
+      size_ = full_vector_.size() / nsets_;
+      set_front_pointer();
+    }
+  }
+
+  void set_front_pointer() {
+    offset_ = size_ * active_set_;
+    // Since we keep a raw pointer, must reset it whenever full_vector_'s
+    // storage potentially changes, e.g. after any resize
+    front_pointer_ = full_vector_.data() + offset_;
+  }
+
+ public:
+  typedef T& reference;
+  typedef typename P::const_iterator const_iterator;
+  typedef typename P::iterator iterator;
+
+  MultiIndexVector() : active_set_(0), size_(0), nsets_(1) {
+    set_front_pointer();
+  }
+  IMP_BRACKET(T, Index<Tag>, get_as_unsigned_int(i) < size_,
+              return front_pointer_[get_as_unsigned_int(i)]);
+
+  // Update front pointer after copy constructor
+  MultiIndexVector(const MultiIndexVector& s)
+          : full_vector_(s.full_vector_), active_set_(s.active_set_),
+            size_(s.size_), nsets_(s.nsets_) {
+    // pointer points into s; update it to point into this
+    set_front_pointer();
+  }
+
+  // Update front pointer after assignment from another object
+  MultiIndexVector& operator=(const MultiIndexVector& s) {
+    full_vector_ = s.full_vector_;
+    active_set_ = s.active_set_;
+    size_ = s.size_;
+    nsets_ = s.nsets_;
+    // pointer points into s; update it to point into this
+    set_front_pointer();
+    return *this;
+  }
+
+  T* data() { return front_pointer_; }
+  const T* data() const { return front_pointer_; }
+
+  T* full_data() { return full_vector_.data(); }
+  const T* full_data() const { return full_vector_.data(); }
+
+  std::size_t size() const { return size_; }
+
+  //! Get the number of attribute sets (we generally start with 1)
+  int get_number_of_sets() const { return nsets_; }
+
+  void set_number_of_sets(int nsets, const T &fill_value) {
+    IMP_USAGE_CHECK(nsets >= 1, "Cannot have less than 1 set");
+    IMP_USAGE_CHECK(active_set_ == 0,
+                    "Cannot set number of sets when active set is not 0");
+    nsets_ = nsets;
+    active_set_ = 0;
+    full_vector_.resize(size_ * nsets, fill_value);
+    set_front_pointer();
+  }
+
+  void set_active_set(int set) {
+    IMP_USAGE_CHECK(set >= 0 && set < nsets_, "Invalid set index");
+    active_set_ = set;
+    set_front_pointer();
+  }
+
+  void resize(size_t count, const T &fill_value) {
+    if (nsets_ == 1) {
+      size_ = count;
+      full_vector_.resize(count, fill_value);
+      set_front_pointer();
+    } else {
+      IMP_THROW("Cannot add particles when using more than one attribute set",
+                IndexException);
+    }
+  }
+
+  iterator begin() { return full_vector_.begin() + offset_; }
+  iterator end() { return full_vector_.begin() + offset_ + size_; }
+  const_iterator begin() const { return full_vector_.begin() + offset_; }
+  const_iterator end() const { return full_vector_.begin() + offset_ + size_; }
+};
+
 //! traits for a table of Float attribute (a C/C++ double type),
 //! see also DefaultTraits
 struct FloatAttributeTableTraits : public DefaultTraits<double, FloatKey> {
+  typedef MultiIndexVector<ParticleIndexTag, double> Container;
   static double get_invalid() {
     /* do not use NaN as sometimes GCC will optimize things incorrectly.*/
     /*if (std::numeric_limits<float>::has_quiet_NaN) {
@@ -134,11 +255,15 @@ struct FloatAttributeTableTraits : public DefaultTraits<double, FloatKey> {
       } else*/
     return f < std::numeric_limits<double>::max();
   }
-  //  //! allow direct const access to the container data
-  //  static double const* access_container_data(Container const& c) { return c.data(); }
-  //  //! allow direct non-const access to the container data
-  //  static double*       access_container_data(Container&       c) { return c.data(); }
+  //! allow direct const access to the container data
+  static ContainerConstDataAccess access_container_data(Container const& c) { return c.data(); }
+  //! allow direct non-const access to the container data
+  static ContainerDataAccess access_container_data(Container&       c) { return c.data(); }
 
+  //! allow direct const access to the full container data (all sets)
+  static ContainerConstDataAccess access_full_container_data(Container const& c) { return c.full_data(); }
+  //! allow direct non-const access to the full container data (all sets)
+  static ContainerDataAccess access_full_container_data(Container&       c) { return c.full_data(); }
 };
 
 struct ParticleAttributeTableTraits

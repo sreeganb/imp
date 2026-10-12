@@ -2,7 +2,7 @@
  *  \file IMP/Restraint.h
  *  \brief Abstract base class for all restraints.
  *
- *  Copyright 2007-2022 IMP Inventors. All rights reserved.
+ *  Copyright 2007-2026 IMP Inventors. All rights reserved.
  *
  */
 
@@ -117,6 +117,12 @@ class IMPKERNELEXPORT Restraint : public ModelObject {
       may be overridden by restraints to be more efficient, e.g. by
       skipping terms that involve unchanged particles.
 
+      This function is intended to be called in a loop within an
+      optimizer that moves only a subset of particles each time,
+      e.g. Monte Carlo. Before the first call (where the state of the model
+      is unknown) you should call clear_moved_cache() otherwise out of date
+      information may be used.
+
       \param da Object to accumulate derivatives, or nullptr.
       \param moved_pis Particles that have moved since the last
              scoring function evaluation.
@@ -132,6 +138,11 @@ class IMPKERNELEXPORT Restraint : public ModelObject {
     IMP_UNUSED(moved_pis);
     IMP_UNUSED(reset_pis);
     return unprotected_evaluate(da);
+  }
+
+  //! Clear any caches used by unprotected_evaluate_moved().
+  virtual void clear_moved_cache() {
+    last_score_ = last_last_score_ = BAD_SCORE;
   }
 
   /** The function calling this will treat any score >= get_maximum_score
@@ -290,6 +301,9 @@ class IMPKERNELEXPORT Restraint : public ModelObject {
   //! Return whether this restraint wraps a number of other restraints
   bool get_is_aggregate() const { return is_aggregate_; }
 
+  //! Return whether this restraint provides custom logic for reset moves
+  bool get_is_custom_reset() const { return is_custom_reset_; }
+
   /** Return whether this restraint violated its maximum last time it was
       evaluated.
    */
@@ -328,7 +342,7 @@ class IMPKERNELEXPORT Restraint : public ModelObject {
   }
 
  protected:
-  bool is_aggregate_;
+  bool is_aggregate_, is_custom_reset_;
 
  private:
   ScoringFunction *create_internal_scoring_function() const;
@@ -350,8 +364,8 @@ class IMPKERNELEXPORT Restraint : public ModelObject {
      last_score_ = last_last_score_ = BAD_SCORE;
      cached_internal_scoring_function_ = nullptr;
    }
-   // Note that is_aggregate_ is not read or written here, as it is only
-   // ever set in the constructor
+   // Note that flags (is_aggregate_, is_custom_reset_) are not read or
+   // written here, as they are only ever set in the constructor
  }
 
 };

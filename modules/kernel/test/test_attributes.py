@@ -1,4 +1,5 @@
 import IMP
+import IMP.core
 import IMP.test
 if IMP.IMP_KERNEL_HAS_NUMPY:
     import numpy
@@ -51,6 +52,115 @@ class Tests(IMP.test.TestCase):
         self.assertEqual(m.get_attribute(ik, p.get_index()), 1)
         m.add_attribute(isk, p.get_index(), [IntLike(9)])
         self.assertEqual(m.get_attribute(isk, p.get_index()), [9])
+
+    def test_float_attribute_sets(self):
+        """Test attribute sets of FloatKeys"""
+        m = IMP.Model()
+        fk = IMP.FloatKey("fk")
+        # Before any attributes added, nset==1
+        self.assertEqual(m.get_number_of_attribute_sets(fk), 1)
+
+        p1 = IMP.Particle(m)
+        p2 = IMP.Particle(m)
+        m.add_attribute(fk, p1.get_index(), 42.0)
+        m.add_attribute(fk, p2.get_index(), 99.0)
+        self.assertEqual(m.get_number_of_attribute_sets(fk), 1)
+
+        m.set_number_of_attribute_sets(fk, 4)
+        self.assertEqual(m.get_number_of_attribute_sets(fk), 4)
+
+        self.assertAlmostEqual(m.get_attribute(fk, p1.get_index()),
+                               42.0, delta=1e-5)
+        self.assertRaisesUsageException(m.set_active_attribute_set, fk, -1)
+        self.assertRaisesUsageException(m.set_active_attribute_set, fk, 1000)
+        m.set_active_attribute_set(fk, 2)
+
+        # Check values in different sets
+        m.add_attribute(fk, p1.get_index(), 19.0)
+        self.assertAlmostEqual(m.get_attribute(fk, p1.get_index()),
+                               19.0, delta=1e-5)
+        m.set_active_attribute_set(fk, 0)
+        self.assertAlmostEqual(m.get_attribute(fk, p1.get_index()),
+                               42.0, delta=1e-5)
+
+        m.set_active_attribute_set(fk, 2)
+        # Cannot change number of sets when we're using the non-default set
+        self.assertRaisesUsageException(m.set_number_of_attribute_sets, fk, 1)
+
+        # Cannot add attributes when we have more than one set
+        p3 = IMP.Particle(m)
+        self.assertRaises(IndexError, m.add_attribute,
+                          fk, p3.get_index(), 42.0)
+
+        # Methods don't currently work on xyz, radius, internal coordinates
+        self.assertRaises(TypeError, m.get_number_of_attribute_sets, xkey)
+        self.assertRaises(TypeError, m.set_number_of_attribute_sets, xkey, 2)
+        self.assertRaises(TypeError, m.set_active_attribute_set, xkey, 2)
+
+        # NumPy view should return all 4 sets
+        if IMP.IMP_KERNEL_HAS_NUMPY:
+            n = m.get_numpy(fk)
+            self.assertFalse(n.flags.owndata)
+            self.assertEqual(n.shape, (4, 2))
+            self.assertAlmostEqual(n[0,0], 42.0, delta=1e-4)
+            self.assertAlmostEqual(n[0,1], 99.0, delta=1e-4)
+            self.assertAlmostEqual(n[2,0], 19.0, delta=1e-4)
+
+    def test_sphere_attribute_sets(self):
+        """Test attribute sets of spheres"""
+        m = IMP.Model()
+        # Before any attributes added, nset==1
+        self.assertEqual(m.get_number_of_sphere_attribute_sets(), 1)
+
+        p1 = IMP.Particle(m)
+        p2 = IMP.Particle(m)
+        d1 = IMP.core.XYZR.setup_particle(
+            p1, IMP.algebra.Sphere3D(IMP.algebra.Vector3D(5.0, 7.0, 9.0), 1.5))
+        d2 = IMP.core.XYZR.setup_particle(
+            p2, IMP.algebra.Sphere3D(IMP.algebra.Vector3D(1.0, 2.0, 3.0), 2.5))
+        self.assertEqual(m.get_number_of_sphere_attribute_sets(), 1)
+
+        m.set_number_of_sphere_attribute_sets(4)
+        self.assertEqual(m.get_number_of_sphere_attribute_sets(), 4)
+
+        self.assertAlmostEqual(d1.get_coordinates()[0], 5.0, delta=1e-5)
+        self.assertAlmostEqual(d1.get_radius(), 1.5, delta=1e-5)
+        self.assertRaisesUsageException(m.set_active_sphere_attribute_set, -1)
+        self.assertRaisesUsageException(
+            m.set_active_sphere_attribute_set, 1000)
+        m.set_active_sphere_attribute_set(2)
+
+        # Check values in different sets
+        self.assertFalse(IMP.core.XYZR.get_is_setup(p1))
+        d1 = IMP.core.XYZR.setup_particle(
+            p1, IMP.algebra.Sphere3D(IMP.algebra.Vector3D(4.0, 5.0, 6.0), 3.5))
+        self.assertAlmostEqual(d1.get_coordinates()[0], 4.0, delta=1e-5)
+        m.set_active_sphere_attribute_set(0)
+        self.assertAlmostEqual(d1.get_coordinates()[0], 5.0, delta=1e-5)
+
+        m.set_active_sphere_attribute_set(2)
+        # Cannot change number of sets when we're using the non-default set
+        self.assertRaisesUsageException(
+            m.set_number_of_sphere_attribute_sets, 1)
+
+        # Cannot add attributes when we have more than one set
+        p3 = IMP.Particle(m)
+        self.assertRaises(IndexError, IMP.core.XYZR.setup_particle, p3)
+
+        # NumPy view should return all 4 sets
+        if IMP.IMP_KERNEL_HAS_NUMPY:
+            xyz, r = m.get_spheres_numpy()
+            self.assertFalse(xyz.flags.owndata)
+            self.assertFalse(r.flags.owndata)
+            self.assertEqual(xyz.shape, (4, 2, 3))
+            self.assertEqual(r.shape, (4, 2))
+            self.assertAlmostEqual(xyz[0,0,0], 5.0, delta=1e-4)
+            self.assertAlmostEqual(xyz[2,0,0], 4.0, delta=1e-4)
+            self.assertAlmostEqual(r[0,0], 1.5, delta=1e-4)
+            self.assertAlmostEqual(r[0,1], 2.5, delta=1e-4)
+            self.assertAlmostEqual(r[2,0], 3.5, delta=1e-4)
+            r[2,0] = 4.5
+            self.assertAlmostEqual(d1.get_radius(), 4.5, delta=1e-4)
 
     @IMP.test.skipIf(not IMP.IMP_KERNEL_HAS_NUMPY, "No numpy support")
     def test_numpy_int(self):

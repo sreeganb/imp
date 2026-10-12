@@ -142,7 +142,7 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def score(jm, point, uf):
-            xyzs = jm['xyz'][indexes]
+            xyzs = jm['xyz'][...,indexes,:]
             drs = space.distance(xyzs - point)
             return uf(drs)
         uf = self.get_unary_function().get_derived_object()
@@ -157,7 +157,7 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def score(jm, box_min, box_max, uf):
-            xyzs = jm['xyz'][indexes]
+            xyzs = jm['xyz'][...,indexes,:]
             # This calculates the distance and the score for every point,
             # even those inside the box. IMP just returns zero for points
             # inside the box, skipping the distance calculation.
@@ -178,39 +178,21 @@
 %extend IMP::core::GenericBoundingSphere3DSingletonScore<UnaryFunction> {
   %pythoncode %{
     def _get_jax(self, m, indexes, space):
+        import numpy as np
         import jax.numpy as jnp
-        import jax.lax
-        def score_with_radius(jm, inds, center, radius):
-            xyzs = jm['xyz'][inds]
-            radii = jm['r'][inds]
+        def score(jm, use_radii, center, radius, uf):
+            xyzs = jm['xyz'][...,indexes,:]
+            radii = jnp.where(use_radii, jm['r'][...,indexes], 0.0)
             drs = space.distance(xyzs - center) + radii - radius
-            return jax.lax.select(drs < 0.000001, jnp.zeros_like(drs), uf(drs))
-        def score_without_radius(jm, inds, center, radius):
-            xyzs = jm['xyz'][inds]
-            drs = space.distance(xyzs - center) - radius
-            return jax.lax.select(drs < 0.000001, jnp.zeros_like(drs), uf(drs))
-        without_radii_inds = []
-        with_radii_inds = []
-        for ind in indexes:
-            if XYZR.get_is_setup(m, ind):
-                with_radii_inds.append(ind)
-            else:
-                without_radii_inds.append(ind)
-        without_radii_inds = jnp.asarray(without_radii_inds)
-        with_radii_inds = jnp.asarray(with_radii_inds)
-        uf = self.get_unary_function().get_derived_object()._get_jax()
+            return jnp.where(drs < 0.000001, 0.0, uf(drs))
+        use_radii = np.array([XYZR.get_is_setup(m, IMP.ParticleIndex(ind))
+                              for ind in indexes])
+        uf = self.get_unary_function().get_derived_object()
         sphere = self.get_sphere()
-        radius = sphere.get_radius()
-        center = jnp.asarray(sphere.get_center())
-        def score(jm):
-            s = 0.
-            if without_radii_inds.size > 0:
-                s += score_without_radius(jm, without_radii_inds,
-                                          center, radius)
-            if with_radii_inds.size > 0:
-                s += score_with_radius(jm, with_radii_inds, center, radius)
-            return s
-        return self._wrap_jax(m, score)
+        f = functools.partial(score, use_radii=use_radii,
+                              center=jnp.asarray(sphere.get_center()),
+                              radius=sphere.get_radius(), uf=uf._get_jax())
+        return self._wrap_jax(m, f)
   %}
 }
 
@@ -218,10 +200,10 @@
   %pythoncode %{
     def _get_jax(self, m, indexes, space):
         def score_float_key(jm, key, uf):
-            return uf(jm[key][indexes])
+            return uf(jm[key][...,indexes])
 
         def score_xyz_key(jm, xyz_index, uf):
-            return uf(jm['xyz'][indexes, xyz_index])
+            return uf(jm['xyz'][..., indexes, xyz_index])
 
         uf = self.get_unary_function().get_derived_object()._get_jax()
         key = self.get_key()
@@ -248,8 +230,8 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def jax_harmonic_distance_pair_score(jm, d, k):
-            xyzs = jm['xyz'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
+            xyzs = jm['xyz'][...,indexes,:]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
             drs = space.distance(diff)
             return 0.5 * k * (d - drs)**2
         f = functools.partial(jax_harmonic_distance_pair_score,
@@ -263,10 +245,10 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def jax_score(jm, d, k):
-            xyzs = jm['xyz'][indexes]
-            rs = jm['r'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
-            drs = space.distance(diff) - rs.sum(axis=1)
+            xyzs = jm['xyz'][...,indexes,:]
+            rs = jm['r'][...,indexes]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
+            drs = space.distance(diff) - rs.sum(axis=-1)
             return 0.5 * k * (d - drs)**2
         f = functools.partial(jax_score, d=self.get_x0(), k=self.get_k())
         return self._wrap_jax(m, f)
@@ -279,10 +261,10 @@
         import jax.numpy as jnp
         import jax.lax
         def jax_score(jm, d, k):
-            xyzs = jm['xyz'][indexes]
-            rs = jm['r'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
-            drs = space.distance(diff) - rs.sum(axis=1)
+            xyzs = jm['xyz'][...,indexes,:]
+            rs = jm['r'][...,indexes]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
+            drs = space.distance(diff) - rs.sum(axis=-1)
             return 0.5 * k * jax.lax.min(d - drs, 0.0) ** 2
         f = functools.partial(jax_score, d=self.get_x0(), k=self.get_k())
         return self._wrap_jax(m, f)
@@ -295,10 +277,10 @@
         import jax.numpy as jnp
         import jax.lax
         def jax_score(jm, k):
-            xyzs = jm['xyz'][indexes]
-            rs = jm['r'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
-            drs = space.distance(diff) - rs.sum(axis=1)
+            xyzs = jm['xyz'][...,indexes,:]
+            rs = jm['r'][...,indexes]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
+            drs = space.distance(diff) - rs.sum(axis=-1)
             return 0.5 * k * jax.lax.min(drs, 0.0) ** 2
         f = functools.partial(jax_score, k=self.get_k())
         return self._wrap_jax(m, f)
@@ -310,10 +292,10 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def jax_score(jm, uf):
-            xyzs = jm['xyz'][indexes]
-            rs = jm['r'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
-            drs = space.distance(diff) - rs.sum(axis=1)
+            xyzs = jm['xyz'][...,indexes,:]
+            rs = jm['r'][...,indexes]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
+            drs = space.distance(diff) - rs.sum(axis=-1)
             return uf(drs)
         sfnc = self.get_score_functor()
         uf = sfnc.get_unary_function().get_derived_object()
@@ -327,8 +309,8 @@
     def _get_jax(self, m, indexes, space):
         import jax.numpy as jnp
         def jax_score(jm, uf):
-            xyzs = jm['xyz'][indexes]
-            diff = xyzs[:,0] - xyzs[:,1]
+            xyzs = jm['xyz'][...,indexes,:]
+            diff = xyzs[...,0,:] - xyzs[...,1,:]
             drs = space.distance(diff)
             return uf(drs)
         sfnc = self.get_score_functor()
@@ -347,7 +329,7 @@
         indexes = jnp.array([self.get_index()])
         ji = ps._get_jax(self.get_model(), indexes, space=space)
         def score(jm):
-            return jnp.sum(ji.score_func(jm))
+            return jnp.sum(ji.score_func(jm), axis=-1)
         return self._wrap_jax(score)
   %}
 }

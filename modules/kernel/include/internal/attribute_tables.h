@@ -396,7 +396,7 @@ IMP_SWAP_1(SparseBasicAttributeTable);
 class FloatAttributeTable {
   // vector<algebra::Sphere3D> spheres_;
   // vector<algebra::Sphere3D> sphere_derivatives_;
-  IndexVector<ParticleIndexTag, algebra::Sphere3D,
+  MultiIndexVector<ParticleIndexTag, algebra::Sphere3D,
               IMP_VECTOR_ALLOCATOR<algebra::Sphere3D>,
               sphere_equal<algebra::Sphere3D>> spheres_;
   IndexVector<ParticleIndexTag, algebra::Sphere3D,
@@ -777,6 +777,12 @@ class FloatAttributeTable {
   algebra::Sphere3D* access_spheres_data(){
     return spheres_.data();
   }
+  algebra::Sphere3D const* access_full_spheres_data() const {
+    return spheres_.full_data();
+  }
+  algebra::Sphere3D* access_full_spheres_data() {
+    return spheres_.full_data();
+  }
   unsigned get_sphere_derivatives_size() const {
     return sphere_derivatives_.size();
   }
@@ -832,6 +838,13 @@ class FloatAttributeTable {
     IMP_USAGE_CHECK(ki < (data_.access_data()).size(),
                     "trying to access an attribute that was not added to this model");
     return internal::FloatAttributeTableTraits::access_container_data
+      ((data_.access_data())[ki]);
+  }
+  double* access_full_attribute_data(FloatKey k){
+    IMP_USAGE_CHECK(k.get_index()>=7,
+		    "coordinates and radius should be accessed by specialized methods");
+    unsigned int ki= k.get_index()-7;
+    return internal::FloatAttributeTableTraits::access_full_container_data
       ((data_.access_data())[ki]);
   }
   //! Get the size of the derivative table for the given key.
@@ -907,6 +920,60 @@ class FloatAttributeTable {
            && (data_.access_data())[ki].size() > 0;
   }
   /** @} */
+
+  int get_number_of_attribute_sets(FloatKey k) const {
+    if (k.get_index() >= 7) {
+      unsigned ind = k.get_index() - 7;
+      if (data_.size() <= ind) {
+        return 1;
+      } else {
+        return data_.access_data()[ind].get_number_of_sets();
+      }
+    } else {
+      IMP_THROW("Currently not supported for xyz, radii, internal coordinates",
+                TypeException);
+    }
+  }
+
+  int get_number_of_sphere_attribute_sets() const {
+    return spheres_.get_number_of_sets();
+  }
+
+  void set_number_of_attribute_sets(FloatKey k, int nsets) {
+    if (k.get_index() >= 7) {
+      unsigned ind = k.get_index() - 7;
+      if (data_.size() <= ind) {
+        data_.access_data().resize(ind + 1);
+      } else {
+        data_.access_data()[ind].set_number_of_sets(
+            nsets, internal::FloatAttributeTableTraits::get_invalid());
+      }
+    } else {
+      IMP_THROW("Currently not supported for xyz, radii, internal coordinates",
+                TypeException);
+    }
+  }
+
+  void set_number_of_sphere_attribute_sets(int nsets) {
+    spheres_.set_number_of_sets(nsets, get_invalid_sphere());
+  }
+
+  void set_active_attribute_set(FloatKey k, int set) {
+    if (k.get_index() >= 7) {
+      unsigned ind = k.get_index() - 7;
+      if (data_.size() <= ind) {
+        data_.access_data().resize(ind + 1);
+      }
+      data_.access_data()[ind].set_active_set(set);
+    } else {
+      IMP_THROW("Currently not supported for xyz, radii, internal coordinates",
+                TypeException);
+    }
+  }
+
+  void set_active_sphere_attribute_set(int set) {
+    spheres_.set_active_set(set);
+  }
 
   void set_range(FloatKey k, FloatRange fr) { ranges_[k.get_index()] = fr; }
   FloatRange get_range(FloatKey k) {
